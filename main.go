@@ -44,7 +44,7 @@ func main() {
 
 	absolutePath = filepath.Join(parts...)
 
-	http.HandleFunc("/", ReadDir(absolutePath, port))
+	http.HandleFunc("/", readDir(absolutePath, port))
 	http.HandleFunc("/_livego/reload", reloadHandler)
 
 	startMsg := fmt.Sprintf("Server running at http://localhost%s/ - Press CTRL+C to exit", port)
@@ -52,7 +52,7 @@ func main() {
 	http.ListenAndServe(port, nil)
 }
 
-func ReadDir(dir, port string) http.HandlerFunc {
+func readDir(dir, port string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filePath := filepath.Join(dir, r.URL.Path)
 
