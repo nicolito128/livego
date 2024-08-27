@@ -1,0 +1,11 @@
+{
+    "_extra": {},
+    "data": {
+        "list": [],
+        "nil": null,
+        "integer": 0,
+        "float": 3.14159,
+        "str": "hello Jason",
+        "bool": false
+    }
+}
