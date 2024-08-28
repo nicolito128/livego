@@ -84,7 +84,7 @@ func readDir(dir, port string) http.HandlerFunc {
 			data = injectString(data, injectScript(port), injectTxtBodyStyles())
 
 		default:
-			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Type", http.DetectContentType(data))
 		}
 
 		log.Println(color.BlueString("File reloaded:"), color.GreenString(file.Name()))
