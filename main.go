@@ -70,14 +70,14 @@ func readDir(dir, port string) http.HandlerFunc {
 
 		switch filepath.Ext(file.Name()) {
 		case ".html":
-			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			data = injectString(data, injectScript(port))
 
 		case ".json":
 			w.Header().Set("Content-Type", "application/json")
 
 		case ".txt", ".conf", ".md", ".yml", ".toml":
-			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			// escape all the html code
 			data = []byte(html.EscapeString(string(data)))
 			// injections
