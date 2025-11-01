@@ -97,20 +97,23 @@ func ReloadHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		location, err := url.Parse(r.Header.Get("Referer"))
 		if err != nil {
-			panic(err)
+			fmt.Fprint(w, "Error parsing referer:", err)
+			return
 		}
 
 		filePath, err := filepath.Abs(filepath.Join(*path, location.Path))
 		if err != nil {
-			panic(err)
+			fmt.Fprint(w, "Error trying to get file path:", err)
+			return
 		}
 
 		err = WatchFile(filePath)
 		if err != nil {
-			panic(err)
+			fmt.Fprint(w, "Error watching file:", err)
+			return
 		}
 
-		log.Println(color.BlueString("File reloaded:"), location.Path)
+		log.Println(color.BlueString("File reloaded:"), color.GreenString(location.Path))
 		fmt.Fprintf(w, "data: reload\n\n")
 		flusher.Flush()
 	}
