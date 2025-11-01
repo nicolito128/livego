@@ -32,7 +32,7 @@ func main() {
 		log.Fatal("Error getting absolute path: ", err)
 	}
 
-	http.Handle("/", FileHandler(http.Dir(realPath), *addr))
+	http.Handle("/", FileHandler(realPath, *addr))
 	http.HandleFunc("/_livego/reload", ReloadHandler)
 
 	log.Printf("Starting server on %s, serving %s\n", *addr, *path)
@@ -41,40 +41,38 @@ func main() {
 	}
 }
 
-func FileHandler(dir http.Dir, addr string) http.Handler {
+func FileHandler(dir, addr string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Read file
-		file, err := os.Open(filepath.Join(string(dir), r.URL.Path))
+		var file *os.File
+		var err error
+		var reader io.ReadSeeker
+
+		if r.URL.Path == "/" {
+			_, err = os.Stat(filepath.Join(string(dir), "index.html"))
+			if err == nil {
+				http.Redirect(w, r, "/index.html", http.StatusFound)
+				return
+			}
+		}
+
+		file, err = os.Open(filepath.Join(string(dir), r.URL.Path))
 		if err != nil {
 			fmt.Fprintf(w, "Error opening file: %v", err)
 			return
 		}
 		defer file.Close()
-
-		// Inject the script for hot reload if it's an HTML file
-		var reader io.ReadSeeker = file
-
-		if r.URL.Path == "/" {
-			indexFile, err := os.Open(filepath.Join(string(dir), "index.html"))
-			if err == nil {
-				reader = indexFile
-			}
-			defer indexFile.Close()
-			file.Close()
-			file = indexFile
-		}
+		reader = file
 
 		if fileInfo, _ := file.Stat(); !fileInfo.IsDir() && strings.HasSuffix(fileInfo.Name(), ".html") {
 			b := make([]byte, fileInfo.Size())
-			_, err := file.Read(b)
+			_, err = file.Read(b)
 			if err != nil && err != io.EOF {
 				fmt.Fprintf(w, "Error reading file: %v", err)
 				return
 			}
-
 			// Inject the script
-			data := AppendStrings(b, GetInjectScript(addr))
-			reader = strings.NewReader(string(data))
+			data := strings.ReplaceAll(string(b), "</body>", GetInjectScript(addr)+"</body>")
+			reader = strings.NewReader(data)
 		}
 
 		http.ServeContent(w, r, r.URL.Path, time.Now(), reader)
@@ -144,12 +142,4 @@ func GetInjectScript(addr string) string {
 	s := `<script type="text/javascript">var es = new EventSource("http://localhost%s/_livego/reload");es.onmessage = () => {location.reload()}</script>`
 	s = fmt.Sprintf(s, addr)
 	return s
-}
-
-func AppendStrings(data []byte, s ...string) []byte {
-	for _, inj := range s {
-		data = append(data, inj...)
-	}
-
-	return data
 }
