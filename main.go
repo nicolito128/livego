@@ -3,97 +3,85 @@ package main
 import (
 	"flag"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/fatih/color"
 )
 
-var absolutePath string
+var (
+	addr = flag.String("addr", "8080", "The address to listen on")
+	path = flag.String("path", ".", "The path to watch a directory")
+)
 
 func main() {
-	var cmdPath, port string
-	flag.StringVar(&cmdPath, "path", ".", "Set the path to watch files")
-	flag.StringVar(&port, "port", ":5500", "Set the port to listen and serve")
-
 	flag.Parse()
-	if !strings.HasPrefix(port, ":") {
-		port = ":" + (port)
+	if !strings.HasPrefix(*addr, ":") {
+		*addr = ":" + *addr
 	}
 
-	absPath, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	// Join with the absolute path
+	realPath, err := filepath.Abs(*path)
 	if err != nil {
-		panic(err)
+		log.Fatal("Error getting absolute path: ", err)
 	}
 
-	// Clean path
-	rx := regexp.MustCompile(`\\|\/`)
-	sep := string(os.PathSeparator)
-	res := rx.ReplaceAllLiteralString(cmdPath, sep)
-	// composing path
-	parts := strings.Split(res, sep)
-	parts = append([]string{absPath}, parts...)
+	http.Handle("/", FileHandler(http.Dir(realPath), *addr))
+	http.HandleFunc("/_livego/reload", ReloadHandler)
 
-	absolutePath = filepath.Join(parts...)
-
-	http.HandleFunc("/", readDir(absolutePath, port))
-	http.HandleFunc("/_livego/reload", reloadHandler)
-
-	startMsg := fmt.Sprintf("Server running at http://localhost%s/ - Press CTRL+C to exit", port)
-	fmt.Println(color.YellowString(startMsg))
-	http.ListenAndServe(port, nil)
-}
-
-func readDir(dir, port string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		filePath := filepath.Join(dir, r.URL.Path)
-
-		file, err := os.Open(filePath)
-		if err != nil {
-			fmt.Fprintf(w, err.Error())
-			return
-		}
-
-		data, err := io.ReadAll(file)
-		if err != nil {
-			fmt.Fprintf(w, err.Error())
-			return
-		}
-
-		switch filepath.Ext(file.Name()) {
-		case ".html":
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			data = injectString(data, injectScript(port))
-
-		case ".json":
-			w.Header().Set("Content-Type", "application/json")
-
-		case ".txt", ".conf", ".md", ".yml", ".toml":
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			// escape all the html code
-			data = []byte(html.EscapeString(string(data)))
-			// injections
-			data = injectString(data, injectScript(port), injectTxtBodyStyles())
-
-		default:
-			w.Header().Set("Content-Type", http.DetectContentType(data))
-		}
-
-		log.Println(color.BlueString("File reloaded:"), color.GreenString(file.Name()))
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+	log.Printf("Starting server on %s, serving %s\n", *addr, *path)
+	if err := http.ListenAndServe(*addr, nil); err != nil {
+		log.Fatal("Error starting server: ", err)
 	}
 }
 
-func reloadHandler(w http.ResponseWriter, r *http.Request) {
+func FileHandler(dir http.Dir, addr string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Read file
+		file, err := os.Open(filepath.Join(string(dir), r.URL.Path))
+		if err != nil {
+			fmt.Fprintf(w, "Error opening file: %v", err)
+			return
+		}
+		defer file.Close()
+
+		// Inject the script for hot reload if it's an HTML file
+		var reader io.ReadSeeker = file
+
+		if r.URL.Path == "/" {
+			indexFile, err := os.Open(filepath.Join(string(dir), "index.html"))
+			if err == nil {
+				reader = indexFile
+			}
+			defer indexFile.Close()
+			file.Close()
+			file = indexFile
+		}
+
+		if fileInfo, _ := file.Stat(); !fileInfo.IsDir() && strings.HasSuffix(fileInfo.Name(), ".html") {
+			b := make([]byte, fileInfo.Size())
+			_, err := file.Read(b)
+			if err != nil && err != io.EOF {
+				fmt.Fprintf(w, "Error reading file: %v", err)
+				return
+			}
+
+			// Inject the script
+			data := AppendStrings(b, GetInjectScript(addr))
+			reader = strings.NewReader(string(data))
+		}
+
+		http.ServeContent(w, r, r.URL.Path, time.Now(), reader)
+	})
+}
+
+func ReloadHandler(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return
@@ -101,8 +89,9 @@ func reloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Expires", "0")
 
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
@@ -113,18 +102,23 @@ func reloadHandler(w http.ResponseWriter, r *http.Request) {
 			panic(err)
 		}
 
-		filePath := filepath.Join(absolutePath, location.Path)
-		err = watchFile(filePath)
+		filePath, err := filepath.Abs(filepath.Join(*path, location.Path))
 		if err != nil {
 			panic(err)
 		}
 
+		err = WatchFile(filePath)
+		if err != nil {
+			panic(err)
+		}
+
+		log.Println(color.BlueString("File reloaded:"), location.Path)
 		fmt.Fprintf(w, "data: reload\n\n")
 		flusher.Flush()
 	}
 }
 
-func watchFile(filePath string) error {
+func WatchFile(filePath string) error {
 	initialStat, err := os.Stat(filePath)
 	if err != nil {
 		return err
@@ -146,21 +140,16 @@ func watchFile(filePath string) error {
 	return nil
 }
 
-func injectString(data []byte, s ...string) []byte {
+func GetInjectScript(addr string) string {
+	s := `<script type="text/javascript">var es = new EventSource("http://localhost%s/_livego/reload");es.onmessage = () => {location.reload()}</script>`
+	s = fmt.Sprintf(s, addr)
+	return s
+}
+
+func AppendStrings(data []byte, s ...string) []byte {
 	for _, inj := range s {
 		data = append(data, inj...)
 	}
 
 	return data
-}
-
-func injectScript(port string) string {
-	s := `<script>var es = new EventSource("http://localhost%s/_livego/reload");es.onmessage = () => {location.reload()}</script>`
-	s = fmt.Sprintf(s, port)
-	return s
-}
-
-func injectTxtBodyStyles() string {
-	styles := `<style>body {background: #111;color: #fff;white-space: pre-wrap;}</style>`
-	return styles
 }
