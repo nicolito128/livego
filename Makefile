@@ -1,9 +1,20 @@
-build:
-	go build -o bin/livego main.go
+BINARY = bin/livego
+BINARY_EXE = bin\livego.exe
 
-build-exe:
-	go build -o bin/livego.exe main.go
+OS := $(shell go env GOOS)
+ARCH := $(shell go env GOARCH)
+
+build:
+	@if [ "$(OS)" = "windows" ]; then \
+		go build -o $(BINARY_EXE) .; \
+	else \
+		go build -o $(BINARY) .; \
+	fi
 
 dev:
-	go build -o bin/livego main.go
-	./bin/livego -path ../examples
+	make build
+	@if [ "$(OS)" = "windows" ]; then \
+		$(BINARY_EXE) -path ./examples/; \
+	else \
+		./$(BINARY) -path ./examples/; \
+	fi
